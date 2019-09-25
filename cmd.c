@@ -115,6 +115,26 @@ extern const struct cmd_entry cmd_unlink_window_entry;
 extern const struct cmd_entry cmd_up_pane_entry;
 extern const struct cmd_entry cmd_wait_for_entry;
 
+const struct cmd_entry cmd_custom_user = {
+	.name = "custom-command",
+	.alias = NULL,
+
+	.args = { "", 0, 0 },
+	.usage = "",
+
+	.flags = 0,
+	.exec = cmd_custom_user_exec
+};
+
+char *user_cmd_fullpath;
+static enum cmd_retval
+cmd_custom_user_exec(struct cmd *self, struct cmdq_item *item)
+{
+  exec_program(user_cmd_fullpath);
+  free(user_cmd_fullpath);
+  return (CMD_RETURN_NORMAL);
+}
+
 const struct cmd_entry *cmd_table[] = {
 	&cmd_attach_session_entry,
 	&cmd_bind_key_entry,
@@ -428,6 +448,58 @@ ambiguous:
 	return (NULL);
 }
 
+char *find_exe(const char *cmd){
+  DIR *dp;
+  struct dirent *entry;
+  struct stat statbuf;
+  char *dir = "/home/mike/tmux-commands";
+
+  if ((dp = opendir(dir)) == NULL)
+    return NULL;
+
+  chdir(dir);
+  while((entry = readdir(dp)) != NULL) {
+    lstat(entry->d_name, &statbuf);
+    if(S_ISDIR(statbuf.st_mode)) {
+      continue;
+    }
+
+    if ((strcmp(cmd, entry->d_name) == 0) && statbuf.st_mode & S_IXUSR){
+      char *process_name;
+      asprintf(&process_name, "%s/%s", dir, entry->d_name);
+      return process_name;
+    }
+  }
+
+  chdir("..");
+  closedir(dp);
+  return NULL;
+}
+
+int exec_program(char *process_name){
+  pid_t pid = fork();
+  if (pid){
+    int status;
+    waitpid(pid, &status, 0);
+    return 0;
+  } else {
+    execl(process_name, process_name, NULL);
+    exit(1);
+  }
+  return 1;
+}
+
+static const struct cmd_entry *
+custom_cmd_find(const char *name, char **cause)
+{
+  char *prog = find_exe(name);
+  if (prog == NULL) {
+    return (NULL);
+  }
+  user_cmd_fullpath = prog;
+  return cmd_custom_user;
+}
+
 struct cmd *
 cmd_parse(int argc, char **argv, const char *file, u_int line, char **cause)
 {
@@ -443,9 +515,12 @@ cmd_parse(int argc, char **argv, const char *file, u_int line, char **cause)
 	name = argv[0];
 
 	entry = cmd_find(name, cause);
-	if (entry == NULL)
-		return (NULL);
-	cmd_log_argv(argc, argv, "%s: %s", __func__, entry->name);
+  if (entry == NULL){
+    entry = custom_cmd_find(name, cause);
+    if (entry == NULL)
+      return (NULL);
+  }
+  cmd_log_argv(argc, argv, "%s: %s", __func__, entry->name);
 
 	args = args_parse(entry->args.template, argc, argv);
 	if (args == NULL)
